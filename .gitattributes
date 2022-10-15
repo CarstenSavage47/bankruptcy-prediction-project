@@ -1,2 +1,2 @@
-* linguist-vendored
-*.rmd linguist-vendored=false
+# to change language of repo from Javascript to Python
+    *.js linguist-language=R
