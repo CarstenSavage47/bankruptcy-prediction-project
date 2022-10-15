@@ -1,0 +1,444 @@
+---
+title: "Bankruptcy"
+author: "Umut, Jake, Carsten"
+date: "4/24/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r wrap-hook}
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+```{r Q1, Import Files}
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(DescTools)
+library(ggrepel)
+library(viridis)
+library(stringr)
+library(dplyr)
+library(qwraps2)
+
+getwd()
+#setwd('/Users/carstenjuliansavage/Desktop/R Working Directory/Accounting/Accounting Data Analytics/Data Files/Final Project/Bankruptcy/data/bankruptcies.csv')
+
+BankruptciesCSV <- as_tibble(read_csv('/Users/carstenjuliansavage/Desktop/R Working Directory/Accounting/Accounting Data Analytics/Data Files/Final Project/Bankruptcy/data/bankruptcies.csv'))
+Ratiosbyyear <- as_tibble(read_csv('/Users/carstenjuliansavage/Desktop/R Working Directory/Accounting/Accounting Data Analytics/Data Files/Final Project/Bankruptcy/data/ratios_by_year.csv'))
+
+```
+
+
+```{r Q2 Selecting Predictor Variables}
+# Selecting the variables we want to use for corporate bankruptcy prediction
+
+Ratios <- Ratiosbyyear  %>% 
+  select(gvkey:public_date, cash_debt, curr_debt, int_totdebt, quick_ratio, de_ratio, debt_assets, intcov, TICKER:COMPANY_FKEY)
+
+```
+Here are the predictor variables we chose to include in our model and our reasoning:
+1. Cash Flow/Total Debt -- Indicates how long it would take a company to repay total debt if it only used its cash flow to repay the debt. Important measure of solvency, higher ratio suggests better overall financial health (Investopedia).
+2. Current Liabilities/Total Liabilities -- The proportion of total liabilities that are due within the year/short term. A higher ratio indicates that a company has more debt burden in the short term and may be at a greater risk of bankruptcy. 
+3. Interest/Average Total Debt -- Measures the cost of a company's debt. A higher ratio indicates a larger debt burden and could indicate that a company is at greater risk of bankruptcy because it cannot get low-interest loans from the bank. 
+4. Quick Ratio -- Measures whether the liquid assets of the company are sufficient to cover current liabilities in the short term. A lower ratio indicates that a company would be at a greater risk of insolvency/bankruptcy than a company with a higher quick ratio.
+5. Total Debt/Equity --  It suggests whether shareholders' equity can cover company debt. Measures indebtedness and can indicate insolvency. A higher total debt/equity ratio indicates higher leverage and higher risk to shareholders. (Investopedia).  
+6. Total Debt/Total Assets -- A higher ratio indicates higher leverage and also higher risk, suggesting that companies with higher total-debt-to-total-asset ratios are at higher risk of insolvency/bankruptcy (Investopedia).  
+7. After-Tax Interest Coverage (EBIT/Interest Expense) -- A higher ratio indicates that a company is less burdened by interest expense and is more solvent. 
+```{r Q3 Change Vars Function}
+options(scipen=999)
+
+DLTA <- function(x) {
+(x-lag(x)) / lag(x)
+}
+
+#Add more predictors here to make them into lagged vars
+Ratiosbyyear <- Ratiosbyyear %>%  
+  mutate(across(c(cash_debt, curr_debt, int_totdebt, quick_ratio, de_ratio, debt_assets, intcov),list(dl=DLTA)))
+
+is.na(Ratiosbyyear) <- Ratiosbyyear %>% 
+  sapply(is.infinite) 
+
+Ratiosbyyear <- Ratiosbyyear %>%  
+  drop_na(cash_debt_dl:intcov_dl)
+```
+
+
+```{r Q4}
+# Making sure the dates belong to the Date class in both data sets (Filter 1988)
+Ratiosbyyear  <- Ratiosbyyear %>% 
+  mutate(adate = ymd(adate), 
+         public_date = ymd(adate),
+         adate_year = as.numeric(Year(adate)),
+         public_year = as.numeric(Year(public_date)))
+  
+BankruptciesCSV <- BankruptciesCSV %>% 
+  mutate(bank_event = ymd(bank_event), 
+         bankruptcy_year = as.numeric(Year(bank_event)))
+
+MasterData <- Ratiosbyyear %>%  
+  left_join(BankruptciesCSV) %>% 
+  as_tibble() %>% 
+  filter(adate_year >= 1988)
+```
+
+```{r Q5 Within 1 to 2 Years}
+Y12df <- MasterData %>% 
+  group_by(COMPANY_FKEY) %>%
+  filter(!is.na(bank_event) & adate==max(adate)) %>% 
+  filter(bank_event-adate > 365 & bank_event-adate <= 365*2) %>%
+  mutate(Added=NA_integer_) %>% 
+  
+    group_by(COMPANY_FKEY) %>%
+    # added=1 (or 1:1) will add one row, added=1:2 two rows, etc.
+    do(add_row(.,Added=1:1)) %>%
+    ungroup() %>%
+  
+    #fill() fills in NA values with prior row values that aren't NA. Here, I've filled in everything but the added variable.
+    fill(-c(Added)) %>% 
+    group_by(COMPANY_FKEY) %>% 
+  
+    # This lets me add 1 to the year variable, based on the within-name row_number
+    mutate(adate_year = adate_year + row_number()-1) %>% 
+    mutate(adate = adate %m+% years(1)) %>% 
+    ungroup() %>% 
+  
+    # dump all but the newly-added rows
+    filter(is.na(Added)==FALSE)
+
+Y12df
+```
+
+```{r Q5 Within 2 to 3 Years}
+Y23df <-MasterData %>% 
+  group_by(COMPANY_FKEY) %>%
+  filter(!is.na(bank_event) & adate==max(adate)) %>% 
+  filter(bank_event-adate>365*2 & bank_event-adate <=365*3) %>%
+  mutate(Added=NA_integer_) %>% 
+    group_by(COMPANY_FKEY) %>%
+  
+    # added=1 (or 1:1) will add one row, added=1:2 two rows, etc.
+    do(add_row(.,Added=1:2)) %>%
+    ungroup() %>%
+  
+    #fill() fills in NA values with prior row values that aren't NA. Here, I've filled in everything but the added variable.
+    fill(-c(Added)) %>% 
+    group_by(COMPANY_FKEY) %>% 
+  
+    # This lets me add 1 to the year variable, based on the within-name row_number
+    mutate(adate_year = adate_year+row_number()-1) %>%
+    mutate(adate = if_else(Added == 1,adate %m+% years(1),adate %m+% years(2))) %>% 
+    ungroup() %>% 
+
+    # dump all but the newly-added rows
+    filter(is.na(Added)==FALSE) 
+
+Y23df
+```
+
+```{r Q5 Within 3 to 4 Years}
+Y34df <- MasterData %>% 
+  group_by(COMPANY_FKEY) %>%
+  filter(!is.na(bank_event) & adate==max(adate)) %>% 
+  filter(bank_event-adate > 365*3 & bank_event-adate <= 365*4) %>%
+  mutate(Added=NA_integer_) %>% 
+    group_by(COMPANY_FKEY) %>%
+  
+    # added=1 (or 1:1) will add one row, added=1:2 two rows, etc.
+    do(add_row(.,Added=1:3)) %>%
+    ungroup() %>%
+  
+    #fill() fills in NA values with prior row values that aren't NA. Here, I've filled in everything but the added variable.
+    fill(-c(Added)) %>% 
+    group_by(COMPANY_FKEY) %>% 
+  
+    # This lets me add 1 to the year variable, based on the within-name row_number
+    mutate(adate_year= adate_year+row_number()-1) %>% 
+    mutate(adate = if_else(Added == 1,adate %m+% years(1),
+                           if_else(Added == 2, adate %m+% years(2),adate %m+% years(3)))) %>%
+    ungroup() %>% 
+  
+    # dump all but the newly-added rows
+    filter(is.na(Added)==FALSE)
+
+Y34df
+```
+
+
+```{r Q5 Bind rows and get rid of too early dates}
+AllBankrupt <- bind_rows(Y12df, Y23df, Y34df)
+
+MasterData <- MasterData %>%
+  bind_rows(AllBankrupt) %>%
+  arrange(Added, COMPANY_FKEY)
+MasterData
+
+Bankrupt <- MasterData %>%
+  group_by(COMPANY_FKEY) %>%
+  mutate(Added = as.numeric(Added)) %>%
+  mutate(Added = if_else(is.na(Added), 0, Added)) %>%
+  summarise(Added = max(Added)) %>%
+  mutate(isBankrupt = if_else(Added >= 1, 1, 0))
+
+  sum(Bankrupt$isBankrupt)
+
+MasterData <- MasterData %>%
+  left_join(Bankrupt) %>%
+  replace_na(list(isBankrupt = 0))
+```
+```{r Master Data Ready for ML}
+pacman::p_load(writexl)
+write_xlsx(MasterData, path = "/Users/carstenjuliansavage/Desktop/MasterDataforML.xlsx")
+```
+
+```{r Q6 Summary Stats for Nonbankrupt}
+library(DescTools)
+library(knitr)
+
+MasterWinsorized <- MasterData %>% 
+  mutate(across(-c(gvkey,permno,adate,public_date,adate_year,COMPANY_FKEY,TICKER,fyear,cusip,datadate,tic, isBankrupt), as.double)) %>%
+  mutate(across(-c(gvkey,permno,adate,public_date,adate_year,COMPANY_FKEY,TICKER,fyear,cusip,datadate,tic, isBankrupt),~DescTools::Winsorize(.x,probs = c(0.01, 0.99), na.rm = TRUE)))
+
+MasterWinsorized <- as_tibble(MasterWinsorized)
+
+MasterWinsorized  %>% 
+  filter(isBankrupt == 0) %>% 
+  summarize(across(c(cash_debt, curr_debt,int_totdebt, quick_ratio, de_ratio, debt_assets, intcov),
+                   list(
+            mean= ~mean(.),
+            sd  = ~sd(.),
+            p25 = ~quantile(.,.25),
+            p50 = ~median(.),
+            p75 = ~quantile(.,.75)), 
+            na.rm = TRUE
+            )) 
+
+```
+
+```{r Q6 Summary Stats for Bankrupt}
+MasterWinsorized %>% 
+  filter(isBankrupt==1) %>%
+  summarize(across(c(cash_debt_dl, curr_debt_dl,int_totdebt_dl, 
+                     quick_ratio_dl, de_ratio_dl, debt_assets_dl, intcov_dl),
+            list(
+            mean=~mean(.),
+            sd=~sd(.),
+            p25=~quantile(.,.25),
+            p50=~median(.),
+            p75=~quantile(.,.75)),
+            na.rm = TRUE
+            ))
+```
+
+
+```{r Q6 Frequency Table}
+MasterData %>% 
+  group_by(isBankrupt,adate_year) %>%
+  summarize(n=n()) %>% 
+  mutate(Prop=n/sum(n)) %>%
+  mutate(`Prop_%`=(Prop)*100) %>%
+  rename("Bankruptcy (1=Yes)" = "isBankrupt")
+```
+
+
+
+```{r False negatives and positives costs}
+#Here we’re saying that false negatives cost 
+fn_cost = .4177 #says that false negative cost is 41.77%
+fp_cost = .0927 #says that false positive cost is 9.27%
+
+overall_error_function  <- function(r, pi){
+    #This is doing false negative rate X bankruptcies X Cost of false negatives
+    c1 = (r==1)&(pi<0.5) #logical vector - true if actual 1 but predict 0
+    #This is doing false positive rate X non-bankruptcies X Cost of false positives
+    c0 = (r==0)&(pi>=0.5) #logical vector - true if actual 0 but predict 1
+    return(mean(c1+c0))
+    
+  }
+  
+model_cost_error_function  <- function(r, pi){
+    c1 = (r==1)&(pi<0.5) #logical vector - true if actual 1 but predict 0
+    c0 = (r==0)&(pi>=0.5) #logical vector - true if actual 0 but predict 1
+    return(mean(fn_cost*c1 + fp_cost*c0))
+}
+```
+
+
+```{r CV-Logit-Overall Error}
+library(boot)
+pacman::p_load(caret)
+
+max_poly = 5
+poly = 1:max_poly
+fold_set = c(5,10)
+
+# Set up storage vectors
+
+v           <-  vector("double",max_poly*length(fold_set))
+poly_or_nn  <-  vector("integer",max_poly*length(fold_set))
+fold        <-  vector("integer",max_poly*length(fold_set))
+estimator   <-  vector("character",max_poly*length(fold_set))
+overall_error <- vector("double", max_poly*length(fold_set))
+model_error <- vector("double", max_poly*length(fold_set))
+
+ratio_bankrupt <- MasterWinsorized$isBankrupt    
+  
+
+for (f in seq_along(fold_set)) {
+  for (p in seq_along(poly)) {
+    
+    # We want positions 1:5 for folds=5, positions 6:10 for folds=10
+    # (f-1)*max_poly+p gets us (1-1)*5+1=1,(1-1)*5+2=2, etc.
+    # Once we're at f=2, it gets us (2-1)*5+1=6,(2-1)*5+2=7, etc.
+    
+    location = max_poly*(f-1) + p
+    
+    logit_fit <-  glm(isBankrupt~
+                poly(cash_debt,p) + 
+                poly(curr_debt,p) + 
+                poly(int_totdebt,p) + 
+                poly(quick_ratio,p) + 
+                poly(de_ratio,p) + 
+                poly(debt_assets,p) +
+                poly(intcov, p),
+                    data=MasterWinsorized,
+                family= "binomial")
+    
+    poly_or_nn[location]  <-   p
+    fold[location]        <-   fold_set[f]
+    estimator[location]   <-   "logit"
+    overall_error[location] <- cv.glm(MasterWinsorized, logit_fit, overall_error_function,K = fold_set[f])$delta[1]
+    model_error[location] <- cv.glm(MasterWinsorized, logit_fit, model_cost_error_function,K = fold_set[f])$delta[1]
+  }
+}
+
+LogitTable <- as_tibble(cbind(estimator,fold,poly_or_nn, overall_error, model_error)) %>% 
+  mutate(fold=as.integer(fold),
+         poly_or_nn=as.integer(poly_or_nn)) %>%
+         rename("Estimator"="estimator") %>%
+         rename("Fold"="fold") %>%
+         rename("Poly_or_Inverse_NN"="poly_or_nn") %>%
+         rename("Overall Error"="overall_error") %>% 
+         rename("Model Error Cost" = "model_error") %>%
+         mutate(Poly_or_Inverse_NN=as.double(Poly_or_Inverse_NN)) %>%
+         mutate(`Overall Error`=as.double(`Overall Error`)) %>%
+         mutate(`Model Error Cost`=as.double(`Model Error Cost`))
+LogitTable
+
+```
+
+
+KNN SECTION
+
+```{r Scaled Test and Train for KNN}
+#Make df
+MasterScaled <- MasterData 
+MasterScaled <- MasterScaled %>% #na.omit() %>%
+  mutate(across(c(cash_debt, curr_debt, int_totdebt, quick_ratio, de_ratio, debt_assets, intcov),scale)) %>% 
+  mutate(isBankrupt=ifelse(isBankrupt=="1","B","NB")) %>% 
+  mutate(isBankrupt=as.factor(isBankrupt)) 
+levels(MasterScaled$isBankrupt)
+
+
+MasterScaled %>% select(c(cash_debt, curr_debt, int_totdebt, quick_ratio, de_ratio, debt_assets, intcov,isBankrupt))
+
+```
+
+
+```{r KNN iteration}
+pacman::p_load(caret)
+
+max_nn=5
+nn_set=(1:max_nn)
+fold_set_knn=c(5,10)
+
+ratio_bankrupt <- mean(MasterWinsorized$isBankrupt == 1)
+ratio_non_bankrupt <- 1 - ratio_bankrupt
+
+# Set up storage vectors
+
+v             <-  vector("double",max_nn*length(fold_set_knn))
+poly_or_nn    <-  vector("integer",max_nn*length(fold_set_knn))
+fold          <-  vector("integer",max_nn*length(fold_set_knn))
+estimator     <-  vector("character",max_nn*length(fold_set_knn))
+expected_error_costs_knn  <- vector("double", max_nn*length(fold_set_knn))
+overall_error_knn         <- vector("double", max_nn*length(fold_set_knn))
+
+set.seed(1313)
+
+for (f in seq_along(fold_set_knn)) {
+
+#For overall error rate    
+trControl_fit1 <- trainControl(method  = "cv",
+                            number  = fold_set_knn[f],
+                            preProcOptions=c("scale"))
+  
+
+  #This fits the model, for different numbers of near neighbors
+fit1 <- train(isBankrupt ~ cash_debt+curr_debt+int_totdebt+quick_ratio+de_ratio+debt_assets+intcov,
+               method     = "knn",
+               tuneGrid   = expand.grid(k = 1:max_nn),
+               trControl  = trControl_fit1,
+               metric     = "Accuracy",
+               data       = MasterScaled)
+
+#For Sensitivity and Specificity
+trControl_knn_fit <- trainControl(method  = "cv",
+                            number  = fold_set_knn[f],
+                            classProbs=TRUE,
+                            summaryFunction = twoClassSummary,
+                            preProcOptions=c("scale"))
+
+knn_fit <- train(isBankrupt ~ cash_debt+curr_debt+int_totdebt+quick_ratio+de_ratio+debt_assets+intcov,
+               method     = "knn",
+               tuneGrid   = expand.grid(k = 1:max_nn),
+               trControl  = trControl_knn_fit,
+               data       = MasterScaled)
+
+  #you want the first subset to lie between index 1 and 5, the second from 6 and 10, for the first set,  min=5*(1-1)+1=1
+  #for the first set,  max=5*(1-1)+5=5, for the second set,  min=5*(2-1)+1=6, for the second set,  max=5*(2-1)+5=10
+  
+  min=max_nn*(f-1)+1
+  max=max_nn*(f-1)+max_nn
+
+  
+  poly_or_nn[min:max]   <-  1/nn_set
+  fold[min:max]         <-  fold_set_knn[f]
+  estimator[min:max]    <-  "knn"
+  expected_error_costs_knn[min:max] <- (((fn_cost)*ratio_bankrupt*(1-knn_fit$results$Sens))+((fp_cost)*ratio_non_bankrupt*(1-knn_fit$results$Spec))) 
+  overall_error_knn[min:max] <- (1-fit1$results$Accuracy)
+  }
+
+
+KNNTable <- as_tibble(cbind(estimator,fold_set_knn,poly_or_nn,overall_error_knn,expected_error_costs_knn)) %>% 
+         mutate(poly_or_nn=round(as.numeric(poly_or_nn),2)) %>% mutate(overall_error_knn = as.numeric(overall_error_knn)) %>% arrange(desc(fold_set_knn), desc(poly_or_nn)) %>% mutate(fold_set_knn=as.numeric(fold_set_knn)) %>% 
+          mutate(expected_error_costs_knn = as.numeric(expected_error_costs_knn)) %>% 
+        rename("Poly_or_Inverse_NN"="poly_or_nn") %>% rename("Model Error Cost"="expected_error_costs_knn")  %>%
+         rename("Overall Error"="overall_error_knn") %>% rename("Estimator"="estimator") %>%
+        rename("Fold"="fold_set_knn")
+KNNTable
+```
+
+
+```{r Bind Rows}
+TotalTable <- bind_rows(LogitTable,KNNTable)
+TotalTable
+```
+
+According to the table, which includes overall error and model error costs for both the logit and KNN models, the overall error for the logit model is lower than that of the KNN model, but overall errors for both models are relatively similar and are within .00469 to .01029. The optimal logit model appears to have a polynomial term greater than 1 in 10-fold cross validation, which minimizes the overall error for 10-fold cross validation. The overall error for 5-fold cross validation was constant regardless of the polynomial term. The optimal KNN model appears to be K=5 near neighbors in 5-fold cross validation, which minimizes the overall error rate while having a lower model error cost than the second-best KNN model, which was K=5 near neighbors in 10-fold cross validation. The model error costs for both the logit and KNN models are also relatively similar and are within .001959 to .0025.
