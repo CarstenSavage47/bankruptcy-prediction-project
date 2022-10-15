@@ -441,4 +441,12 @@ TotalTable <- bind_rows(LogitTable,KNNTable)
 TotalTable
 ```
 
-According to the table, which includes overall error and model error costs for both the logit and KNN models, the overall error for the logit model is lower than that of the KNN model, but overall errors for both models are relatively similar and are within .00469 to .01029. The optimal logit model appears to have a polynomial term greater than 1 in 10-fold cross validation, which minimizes the overall error for 10-fold cross validation. The overall error for 5-fold cross validation was constant regardless of the polynomial term. The optimal KNN model appears to be K=5 near neighbors in 5-fold cross validation, which minimizes the overall error rate while having a lower model error cost than the second-best KNN model, which was K=5 near neighbors in 10-fold cross validation. The model error costs for both the logit and KNN models are also relatively similar and are within .001959 to .0025.
+According to the table, which includes overall error and model error costs for both the logit and KNN models, 
+the overall error for the logit model is lower than that of the KNN model, but overall errors for both models 
+are relatively similar and are within .00469 to .01029. The optimal logit model appears to have a polynomial term 
+greater than 1 in 10-fold cross validation, which minimizes the overall error for 10-fold cross validation. 
+The overall error for 5-fold cross validation was constant regardless of the polynomial term. 
+The optimal KNN model appears to be K=5 near neighbors in 5-fold cross validation, which minimizes 
+the overall error rate while having a lower model error cost than the second-best KNN model, 
+which was K=5 near neighbors in 10-fold cross validation. 
+The model error costs for both the logit and KNN models are also relatively similar and are within .001959 to .0025.
